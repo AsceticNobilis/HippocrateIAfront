@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    background-color: #ffffff;
+    margin: 0;
+    padding: 0;
+    height: 100%;
+  }
+  html.dark, html.dark body, html.dark #root {
+    background-color: #1c1c1e;
+  }
+}
