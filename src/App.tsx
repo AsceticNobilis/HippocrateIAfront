@@ -229,7 +229,7 @@ function App() {
       }
 
     } catch {
-      const errorMsg = '❌ Échec de connexion au serveur. Vérifiez que le backend est bien lancé sur http://127.0.0.1:8000';
+      const errorMsg = `❌ Échec de connexion au serveur. Vérifiez que le backend est bien lancé sur ${API_URL}`;
       setMessages(prev => [...prev, { role: 'assistant', content: errorMsg }]);
       if (user && currentConversationId) await saveMessage(currentConversationId, 'assistant', errorMsg);
     } finally {
