@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { X, Upload, FileText, Loader2, CheckCircle, XCircle, ChevronDown, ChevronUp, Sparkles, Download } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { useTranslation } from '../lib/useTranslation';
+import { callReplicate } from '../lib/replicate';
 
 interface QCMQuestion {
   question: string;
@@ -13,10 +14,9 @@ interface QCMQuestion {
 interface QCMGeneratorProps {
   isDarkMode: boolean;
   onClose: () => void;
-  apiUrl: string;
 }
 
-export default function QCMGenerator({ isDarkMode, onClose, apiUrl }: QCMGeneratorProps) {
+export default function QCMGenerator({ isDarkMode, onClose }: QCMGeneratorProps) {
   const { tr } = useTranslation();
   const [mode, setMode] = useState<'file' | 'text'>('file');
   const [file, setFile] = useState<File | null>(null);
@@ -63,24 +63,34 @@ export default function QCMGenerator({ isDarkMode, onClose, apiUrl }: QCMGenerat
     setLoading(true);
 
     try {
-      let response: Response;
+      let data: any;
 
       if (mode === 'file' && file) {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('num_questions', String(numQuestions));
-        formData.append('language', language);
-        response = await fetch(`${apiUrl}/api/upload-qcm`, { method: 'POST', body: formData });
+        // Conversion fichier en base64
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        data = await callReplicate({
+          action: 'upload-qcm',
+          file_base64: base64,
+          file_name: file.name,
+          num_questions: numQuestions,
+          language,
+        });
       } else {
-        response = await fetch(`${apiUrl}/api/generate-qcm-text`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, num_questions: numQuestions, language }),
+        data = await callReplicate({
+          action: 'generate-qcm-text',
+          text,
+          num_questions: numQuestions,
+          language,
         });
       }
 
-      const data = await response.json();
-      if (!response.ok || !data.success) throw new Error(data.detail || data.error || tr('unknownError'));
+      if (!data.success) throw new Error(data.error || tr('unknownError'));
       setQuestions(data.questions);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : tr('unknownError'));

@@ -10,6 +10,7 @@ import Footer from './components/Footer';
 import AdBanner from './components/AdBanner';
 import QCMGenerator from './components/QCMGenerator';
 import { supabase } from './lib/supabase';
+import { callReplicate } from './lib/replicate';
 
 interface User {
   id: string;
@@ -169,7 +170,7 @@ function App() {
     if (error) console.error('Erreur sauvegarde message:', error);
   };
 
-  const handleSendMessage = async (content: string, file?: File, lang?: string ) => {
+  const handleSendMessage = async (content: string, file?: File, lang?: string) => {
     if (!isPremium && remainingPrompts <= 0) {
       setShowPremiumModal(true);
       return;
@@ -200,23 +201,33 @@ function App() {
       let data: any;
 
       if (file) {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('question', content);
-        const response = await fetch(`${API_URL}/api/query-with-file`, { method: 'POST', body: formData });
-        data = await response.json();
+        // Conversion fichier en base64 pour Replicate
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        data = await callReplicate({
+          action: 'query-with-file',
+          question: content,
+          ui_lang: lang || 'fr',
+          file_base64: base64,
+          file_name: file.name,
+        });
       } else {
-         const response = await fetch(`${API_URL}/api/query`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question: content, history: historySnapshot, ui_lang: lang || 'fr' }),
-  });
-        data = await response.json();
+        data = await callReplicate({
+          action: 'query',
+          question: content,
+          history: JSON.stringify(historySnapshot),
+          ui_lang: lang || 'fr',
+        });
       }
 
       const assistantContent = data.success
         ? data.response
-        : `❌ Erreur backend : ${data.error || 'Réponse invalide du serveur.'}`;
+        : `❌ Erreur : ${data.error || 'Réponse invalide.'}`;
 
       setMessages(prev => [...prev, { role: 'assistant', content: assistantContent }]);
 
@@ -228,10 +239,10 @@ function App() {
         setRemainingPrompts(prev => Math.max(0, prev - 1));
       }
 
-    } catch {
-      const errorMsg = `❌ Échec de connexion au serveur. Vérifiez que le backend est bien lancé sur ${API_URL}`;
+    } catch (err: unknown) {
+      const errorMsg = `❌ Échec de connexion à Replicate : ${err instanceof Error ? err.message : 'Erreur inconnue'}`;
       setMessages(prev => [...prev, { role: 'assistant', content: errorMsg }]);
-      if (user && currentConversationId) await saveMessage(currentConversationId, 'assistant', errorMsg);
+      if (user && convId) await saveMessage(convId, 'assistant', errorMsg);
     } finally {
       setIsLoading(false);
     }
@@ -253,24 +264,24 @@ function App() {
     if (user && convId) await saveMessage(convId, 'user', content);
 
     try {
-      const response = await fetch(`${API_URL}/api/query`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question: content, history: historySnapshot, ui_lang: lang || 'fr' }),
-  });
-      const data = await response.json();
+      const data = await callReplicate({
+        action: 'query',
+        question: content,
+        history: JSON.stringify(historySnapshot),
+        ui_lang: lang || 'fr',
+      });
 
       const assistantContent = data.success
         ? data.response
-        : `❌ Erreur backend : ${data.error || 'Réponse invalide du serveur.'}`;
+        : `❌ Erreur : ${data.error || 'Réponse invalide.'}`;
 
       setMessages(prev => [...prev, { role: 'assistant', content: assistantContent }]);
 
       if (user && convId) await saveMessage(convId, 'assistant', assistantContent);
       if (!isPremium) setRemainingPrompts(prev => Math.max(0, prev - 1));
 
-    } catch {
-      const errorMsg = '❌ Échec de connexion au serveur.';
+    } catch (err: unknown) {
+      const errorMsg = `❌ Échec de connexion à Replicate : ${err instanceof Error ? err.message : 'Erreur inconnue'}`;
       setMessages(prev => [...prev, { role: 'assistant', content: errorMsg }]);
       if (user && currentConversationId) await saveMessage(currentConversationId, 'assistant', errorMsg);
     } finally {
@@ -279,17 +290,17 @@ function App() {
   };
 
   const handleResend = (content: string) => {
-  const lang = localStorage.getItem('uiLang') || 'fr';
-  setMessages(prev => {
-    const reversed = [...prev].reverse();
-    const lastUserIndex = reversed.findIndex(m => m.role === 'user' && m.content === content);
-    if (lastUserIndex === -1) return prev;
-    const realIndex = prev.length - 1 - lastUserIndex;
-    const trimmed = prev.slice(0, realIndex);
-    setTimeout(() => handleSendMessageWithHistory(content, trimmed, lang), 0);
-    return trimmed;
-  });
-};
+    const lang = localStorage.getItem('uiLang') || 'fr';
+    setMessages(prev => {
+      const reversed = [...prev].reverse();
+      const lastUserIndex = reversed.findIndex(m => m.role === 'user' && m.content === content);
+      if (lastUserIndex === -1) return prev;
+      const realIndex = prev.length - 1 - lastUserIndex;
+      const trimmed = prev.slice(0, realIndex);
+      setTimeout(() => handleSendMessageWithHistory(content, trimmed, lang), 0);
+      return trimmed;
+    });
+  };
 
   const handleEdit = (content: string) => {
     setIsLoading(false);
@@ -372,24 +383,23 @@ function App() {
             ) : (
               <div className="pb-4">
                 {messages.map((message, index) => {
-  // Trouve la question associée à chaque réponse IA
-  const question = message.role === 'assistant' && index > 0
-    ? messages[index - 1]?.content
-    : undefined;
+                  const question = message.role === 'assistant' && index > 0
+                    ? messages[index - 1]?.content
+                    : undefined;
 
-  return (
-    <ChatMessage
-      key={`${currentConversationId}-${index}`}
-      role={message.role}
-      content={message.content}
-      isDarkMode={isDarkMode}
-      onResend={handleResend}
-      onEdit={handleEdit}
-      question={question}
-      conversationId={currentConversationId}
-    />
-  );
-})}
+                  return (
+                    <ChatMessage
+                      key={`${currentConversationId}-${index}`}
+                      role={message.role}
+                      content={message.content}
+                      isDarkMode={isDarkMode}
+                      onResend={handleResend}
+                      onEdit={handleEdit}
+                      question={question}
+                      conversationId={currentConversationId}
+                    />
+                  );
+                })}
                 {isLoading && (
                   <div className={`py-6 px-4 ${isDarkMode ? 'bg-[#1c1c1e]' : 'bg-white'}`}>
                     <div className="max-w-4xl mx-auto flex gap-4">
@@ -442,10 +452,9 @@ function App() {
 
       {showQCMModal && (
         <QCMGenerator
-          isDarkMode={isDarkMode}
-          onClose={() => setShowQCMModal(false)}
-          apiUrl={API_URL}
-        />
+  isDarkMode={isDarkMode}
+  onClose={() => setShowQCMModal(false)}
+/>
       )}
     </div>
   );
