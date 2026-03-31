@@ -1,0 +1,9 @@
+cat > vercel.json << 'EOF'
+{
+  "functions": {
+    "api/**/*.ts": {
+      "runtime": "@vercel/node"
+    }
+  }
+}
+EOF
